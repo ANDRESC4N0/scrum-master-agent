@@ -157,15 +157,21 @@ def descomponer_idea(titulo: str, descripcion: str, stack: str) -> list:
             "nombre": f"[DB] Diseñar esquema de datos para: {titulo}",
             "tipo": "DB", "orden": 1, "estimacion": "M",
             "descripcion": (
-                f"Diseñar y documentar el modelo de datos para '{titulo}'.\n"
-                "Incluir entidades, relaciones, índices y estrategia de migración.\n"
-                "Validar tipos, constraints y normalización antes de implementar."
+                f"Diseñar y documentar el modelo de datos para '{titulo}'.\n\n"
+                f"Contexto del dominio: {descripcion[:500]}\n\n"
+                "Definir:\n"
+                "- Entidades principales y sus atributos con tipos de dato precisos\n"
+                "- Relaciones (1:1, 1:N, N:M) y claves foráneas\n"
+                "- Índices para las queries más frecuentes del dominio\n"
+                "- Estrategia de migración (up/down) sin downtime si es posible\n"
+                "- Consideraciones de multi-tenancy, soft-delete o auditoría si aplica"
             ),
             "criterios": (
-                "- Diagrama ER o esquema documentado en /docs\n"
-                "- Script de migración listo para ejecutar\n"
-                "- Revisión de constraints completada\n"
-                "- Aprobado por el equipo antes de pasar al backend"
+                f"- Diagrama ER o esquema documentado en /docs para '{titulo}'\n"
+                "- Script de migración up/down listo y probado en local\n"
+                "- Índices definidos y justificados por las queries esperadas\n"
+                "- Revisión de tipos, constraints y normalización completada\n"
+                "- Aprobado por el equipo antes de implementar el backend"
             ),
             "stack": ["PostgreSQL", "TypeScript"],
         },
@@ -173,17 +179,28 @@ def descomponer_idea(titulo: str, descripcion: str, stack: str) -> list:
             "nombre": f"[Backend] Implementar API para: {titulo}",
             "tipo": "Backend", "orden": 2, "estimacion": "L",
             "descripcion": (
-                f"Crear endpoints REST para '{titulo}'.\n"
-                "Incluir validación de inputs, autenticación JWT, manejo de errores HTTP, "
-                "logging estructurado y documentación OpenAPI.\n"
-                "Considerar rate limiting, paginación y transacciones de BD."
+                f"Crear los endpoints REST necesarios para '{titulo}'.\n\n"
+                f"Contexto del dominio: {descripcion[:500]}\n\n"
+                "Implementar:\n"
+                "- Rutas CRUD con verbos HTTP correctos (GET, POST, PUT/PATCH, DELETE)\n"
+                "- Validación de inputs con zod o joi (rechazar payloads inválidos con 400)\n"
+                "- Autenticación JWT: verificar token en cada ruta protegida, extraer claims relevantes\n"
+                "- Autorización por rol/tenant si aplica al dominio de esta idea\n"
+                "- Manejo de errores HTTP estándar (400, 401, 403, 404, 409, 500) sin exponer stack traces\n"
+                "- Logging estructurado (JSON) con request_id, user_id, duración y status en cada request\n"
+                "- Paginación con cursor o offset en endpoints de listado\n"
+                "- Documentación OpenAPI (swagger) de cada endpoint: params, body, responses\n"
+                "- Variables de entorno nuevas documentadas en .env.example"
             ),
             "criterios": (
-                "- Endpoints documentados y con status codes correctos\n"
-                "- Validación en todas las rutas\n"
-                "- Tests unitarios con cobertura > 70%\n"
-                "- Errores sin exponer stack traces al cliente\n"
-                "- Variables documentadas en .env.example"
+                f"- Todos los endpoints de '{titulo}' responden con status codes correctos\n"
+                "- Inputs inválidos retornan 400 con mensaje descriptivo del campo que falla\n"
+                "- Requests sin token o con token expirado retornan 401\n"
+                "- Tests unitarios de la lógica de negocio con cobertura > 70%\n"
+                "- Tests de integración que cubren flujo feliz y al menos 2 casos de error\n"
+                "- Ningún stack trace o dato interno expuesto en respuestas de error\n"
+                "- Documentación OpenAPI accesible en /api/docs\n"
+                "- .env.example actualizado con las nuevas variables"
             ),
             "stack": [t for t in stack_tags if t in ["Node.js", "Python", "TypeScript", "PostgreSQL", "MongoDB", "REST API", "GraphQL"]],
         },
@@ -191,17 +208,23 @@ def descomponer_idea(titulo: str, descripcion: str, stack: str) -> list:
             "nombre": f"[Frontend] Crear interfaz para: {titulo}",
             "tipo": "Frontend", "orden": 3, "estimacion": "L",
             "descripcion": (
-                f"Desarrollar componentes y vistas para '{titulo}'.\n"
-                "Incluir estados de carga y error, formularios con validación client-side, "
-                "feedback visual en acciones async y diseño responsive.\n"
-                "Integrar con API usando fetch/axios con manejo de tokens."
+                f"Desarrollar componentes y vistas para '{titulo}'.\n\n"
+                f"Contexto del dominio: {descripcion[:400]}\n\n"
+                "Implementar:\n"
+                "- Componentes con estado local (useState/useReducer) y conexión al store global si aplica\n"
+                "- Estado de carga (skeleton o spinner), error (mensaje accionable) y vacío (empty state)\n"
+                "- Formularios con validación client-side usando react-hook-form + zod\n"
+                "- Feedback visual inmediato en acciones async (optimistic update o toast)\n"
+                "- Diseño responsive: mobile-first con breakpoints sm/md/lg\n"
+                "- Integración con API: fetch/axios con interceptor de token, manejo de 401 y retry"
             ),
             "criterios": (
-                "- Componentes funcionando en mobile y desktop\n"
-                "- Estados de loading, error y vacío implementados\n"
-                "- Formularios con validación y mensajes claros\n"
-                "- Integración con API probada en desarrollo\n"
-                "- Sin console.errors en producción"
+                f"- Todas las vistas de '{titulo}' renderizan sin errores en mobile y desktop\n"
+                "- Estados de loading, error y vacío implementados en cada listado o acción async\n"
+                "- Formularios validan en cliente antes de enviar y muestran errores por campo\n"
+                "- Token de autenticación se adjunta y renueva correctamente\n"
+                "- Sin console.errors ni warnings en build de producción\n"
+                "- Revisado en Chrome, Firefox y Safari"
             ),
             "stack": [t for t in stack_tags if t in ["React", "Next.js", "TypeScript", "Tailwind"]],
         },
@@ -209,14 +232,21 @@ def descomponer_idea(titulo: str, descripcion: str, stack: str) -> list:
             "nombre": f"[Test] QA e integración para: {titulo}",
             "tipo": "Test", "orden": 4, "estimacion": "M",
             "descripcion": (
-                f"Pruebas de integración E2E para '{titulo}'.\n"
-                "Cubrir flujo feliz, casos edge, errores de red y validación de permisos."
+                f"Pruebas de integración y E2E para '{titulo}'.\n\n"
+                f"Contexto del dominio: {descripcion[:300]}\n\n"
+                "Cubrir:\n"
+                "- Flujo feliz completo de extremo a extremo (usuario → UI → API → BD)\n"
+                "- Al menos 3 casos edge específicos del dominio (datos límite, permisos, concurrencia)\n"
+                "- Manejo de errores de red (timeout, 500, 401)\n"
+                "- Validación de permisos: usuario sin rol adecuado no debe acceder\n"
+                "- Tests de regresión para bugs conocidos si los hay"
             ),
             "criterios": (
-                "- Flujo principal cubierto con tests E2E\n"
-                "- Al menos 3 casos edge testeados\n"
-                "- Tests en CI sin flakiness\n"
-                "- Reporte de cobertura generado"
+                f"- Flujo principal de '{titulo}' cubierto con test E2E automatizado\n"
+                "- Al menos 3 casos edge documentados y testeados\n"
+                "- Tests corriendo en CI en cada PR sin flakiness\n"
+                "- Reporte de cobertura generado y visible en el PR\n"
+                "- Tiempo de ejecución del suite < 5 minutos"
             ),
             "stack": ["TypeScript"],
         },
@@ -227,14 +257,21 @@ def descomponer_idea(titulo: str, descripcion: str, stack: str) -> list:
             "nombre": f"[Infra] Configurar deploy para: {titulo}",
             "tipo": "Infra", "orden": 5, "estimacion": "M",
             "descripcion": (
-                f"Pipeline CI/CD y entorno de deploy para '{titulo}'.\n"
-                "Incluir Dockerfile, variables de entorno, health checks y rollback strategy."
+                f"Pipeline CI/CD y entorno de deploy para '{titulo}'.\n\n"
+                f"Contexto del dominio: {descripcion[:300]}\n\n"
+                "Configurar:\n"
+                "- Dockerfile multi-stage optimizado (build + runtime mínimo)\n"
+                "- Variables de entorno por ambiente (dev/staging/prod) en el servidor\n"
+                "- Health check endpoint que valide conexión a BD y dependencias críticas\n"
+                "- Estrategia de rollback: deploy anterior disponible en < 2 minutos\n"
+                "- Alertas básicas: error rate > 1% o latencia p95 > 2s"
             ),
             "criterios": (
-                "- Pipeline CI corriendo en cada PR\n"
+                "- Pipeline CI ejecuta lint + tests + build en cada PR\n"
                 "- Deploy automático a staging en merge a main\n"
-                "- Health check endpoint respondiendo\n"
-                "- Runbook documentado"
+                "- Health check respondiendo 200 con status de dependencias\n"
+                "- Rollback probado y documentado en runbook\n"
+                "- Variables de entorno documentadas por ambiente"
             ),
             "stack": ["Docker"],
         })
