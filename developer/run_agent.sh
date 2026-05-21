@@ -1,6 +1,6 @@
 #!/bin/bash
-# run_agent.sh — Ejecuta el Scrum Master Agent localmente
-# Uso: ./run_agent.sh [max_ideas]
+# run_agent.sh — Ejecuta el Developer Agent localmente
+# Uso: ./run_agent.sh [max_tareas]
 
 set -e
 
@@ -13,7 +13,7 @@ if [ -f "$AGENT_DIR/.env" ]; then
 fi
 
 # Validar variables requeridas
-for var in NOTION_TOKEN NOTION_DB_EPICAS NOTION_DB_IDEAS NOTION_DB_TAREAS BASE_PATH; do
+for var in NOTION_TOKEN NOTION_DB_TAREAS BASE_PATH; do
   if [ -z "${!var}" ]; then
     echo "❌ Variable requerida no encontrada: $var"
     exit 1
@@ -26,17 +26,16 @@ if [ ! -d "$BASE_PATH" ]; then
   exit 1
 fi
 
-# Límite de ideas opcional
+# Límite de tareas opcional
 if [ -n "$1" ]; then
-  export MAX_IDEAS_POR_EJECUCION="$1"
+  export MAX_TAREAS_POR_EJECUCION="$1"
 fi
 
 echo ""
-echo "🤖 Scrum Master Agent"
+echo "👨‍💻 Developer Agent"
 echo "📁 Base: $BASE_PATH"
-[ -n "$MAX_IDEAS_POR_EJECUCION" ] && echo "📋 Límite: $MAX_IDEAS_POR_EJECUCION ideas"
+[ -n "$MAX_TAREAS_POR_EJECUCION" ] && echo "📋 Límite: $MAX_TAREAS_POR_EJECUCION tareas"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# Ejecutar desde la ruta base para que el agente vea el CLAUDE.md raíz
 cd "$BASE_PATH"
-claude --print "$(cat "$AGENT_DIR/scrum_master_local.md")"
+claude --dangerously-skip-permissions --print "$(cat "$AGENT_DIR/developer_local.md")"

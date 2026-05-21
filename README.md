@@ -1,85 +1,51 @@
-# 🤖 Scrum Master Agent — Local
+# 🤖 AI Agents
 
-Agente que corre en tu máquina, lee tu código real y genera tareas técnicas
-específicas para cada proyecto referenciando archivos, patrones y convenciones existentes.
+Ecosistema de agentes autónomos para el ciclo de desarrollo de software.
+Cada agente corre localmente con acceso al código y se comunica via Notion.
 
-## Arquitectura
+## Agentes
+
+### 🧩 Scrum Master (`/scrum-master`)
+Lee ideas de negocio en Notion, analiza el código existente y genera
+tareas técnicas ordenadas para el equipo de desarrollo.
+
+### 👨‍💻 Developer (`/developer`)
+Lee las tareas del backlog en Notion, implementa el código en el proyecto
+correspondiente y hace commit por tarea en un branch por idea.
+
+## Flujo de colaboración
 
 ```
-C:/documentos/work/
-├── CLAUDE.md                  ← arquitectura global y relaciones entre proyectos
-├── backoffice/                ← proyecto Go + React
-│   ├── CLAUDE.md o README.md
-│   └── ...código
-├── auth-service/
-└── scrum-master-agent/        ← este repositorio
-    ├── notion_tool.py         ← CRUD de Notion
-    ├── scrum_master_local.md  ← prompt del agente
-    ├── run_agent.sh           ← script de arranque
-    └── .env                   ← credenciales (no subir a git)
+[Tú]  →  Escribes idea en Notion (campo Proyecto + descripción)
+  ↓
+[Scrum Master]  →  Analiza código + genera tareas técnicas en Notion
+  ↓
+[Developer]  →  Lee tareas → implementa → commit → push branch
+  ↓
+[Tú]  →  Revisas el PR y haces merge
 ```
 
-## Requisitos
+## Comunicación entre agentes
 
-- **Claude Code CLI** instalado: https://claude.ai/code
-- **Python 3.8+**
-- **Variables de entorno** configuradas en `.env`
+Ambos agentes dejan comentarios en las tarjetas de Notion:
+- **Scrum Master** → aclara criterios de aceptación o agrega contexto
+- **Developer** → reporta bloqueos, dudas técnicas o decisiones tomadas
 
 ## Configuración
 
-### 1. Clonar este repo dentro de tu workspace
-```bash
-cd C:/documentos/work
-git clone https://github.com/ANDRESC4N0/scrum-master-agent
-```
+Cada agente tiene su propio `.env` con sus variables específicas.
+Ambos comparten `BASE_PATH` y `NOTION_TOKEN`.
 
-### 2. Crear el archivo .env
-```bash
-cp scrum-master-agent/.env.example scrum-master-agent/.env
-# Edita .env con tus valores reales
-```
-
-### 3. Crear integración en Notion
-1. Ve a https://www.notion.so/my-integrations
-2. New integration → `scrum-master-agent` → Internal
-3. Copia el token → NOTION_TOKEN en .env
-4. En cada tablero: `...` → Connections → conecta la integración
-
-## Uso
+## Ejecución
 
 ```bash
-# Procesar todas las ideas pendientes
-cd C:/documentos/work
-./scrum-master-agent/run_agent.sh
+# Scrum Master — procesar ideas pendientes
+./scrum-master/run_agent.sh
 
-# Procesar máximo N ideas
-./scrum-master-agent/run_agent.sh 2
+# Developer — ejecutar tareas del backlog
+./developer/run_agent.sh
+
+# Con límite
+./scrum-master/run_agent.sh 2   # máximo 2 ideas
+./developer/run_agent.sh 5      # máximo 5 tareas
 ```
-
-## Qué genera el agente
-
-Para una idea como *"Agregar feature de exportación de reportes en backoffice"*:
-
-```
-[Backend] Agregar handler ExportarReportes en backoffice/internal/handlers/reportes.go
-  → Sigue el patrón de handlers/usuarios.go, usa el middleware de auth existente
-
-[DB] Agregar query GetReportesPaginados en backoffice/internal/repository/reporte_repo.go
-  → Extiende la interfaz ReporteRepository con el nuevo método
-
-[Frontend] Crear componente ExportButton en backoffice/web/src/components/Reportes/
-  → Sigue el patrón de components/Usuarios/ExportButton.tsx si existe
-
-[Test] Tests unitarios para ExportarReportes en backoffice/internal/handlers/reportes_test.go
-  → Sigue el patrón de tests existente en el proyecto
-```
-
-## Variables de entorno
-
-| Variable | Requerida | Descripción |
-|---|---|---|
-| NOTION_TOKEN | ✅ | Token de integración interna de Notion |
-| NOTION_DB_EPICAS | ✅ | ID de la base de datos de Épicas |
-| NOTION_DB_IDEAS | ✅ | ID de la base de datos de Ideas |
-| NOTION_DB_TAREAS | ✅ | ID de la base de datos de Tareas técnicas |
-| MAX_IDEAS_POR_EJECUCION | ❌ | Límite de ideas por ejecución (sin límite si no se define) |
