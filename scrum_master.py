@@ -17,10 +17,14 @@ def require_env(name: str) -> str:
         raise EnvironmentError(f"Variable de entorno requerida no encontrada: {name}")
     return value
 
-NOTION_TOKEN = require_env("NOTION_TOKEN")
-DB_EPICAS    = require_env("NOTION_DB_EPICAS")
-DB_IDEAS     = require_env("NOTION_DB_IDEAS")
-DB_TAREAS    = require_env("NOTION_DB_TAREAS")
+NOTION_TOKEN     = require_env("NOTION_TOKEN")
+DB_EPICAS        = require_env("NOTION_DB_EPICAS")
+DB_IDEAS         = require_env("NOTION_DB_IDEAS")
+DB_TAREAS        = require_env("NOTION_DB_TAREAS")
+
+# Opcional: cuántas ideas procesar por ejecución. Sin límite si no se define.
+_max_raw         = os.environ.get("MAX_IDEAS_POR_EJECUCION", "").strip()
+MAX_IDEAS        = int(_max_raw) if _max_raw.isdigit() else None
 
 HEADERS = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
@@ -142,6 +146,121 @@ def inferir_epica(titulo: str, descripcion: str, epicas: list) -> str | None:
     return None
 
 
+def detectar_capas(titulo: str, descripcion: str, stack: str) -> dict:
+    """
+    Analiza el título, descripción y stack de la idea para determinar
+    qué capas técnicas son realmente necesarias.
+    Retorna un dict de booleanos: {db, backend, frontend, test, infra}
+    """
+    texto = (titulo + " " + descripcion + " " + stack).lower()
+
+    # Señales de que NO hay capa de datos nueva
+    sin_db = any(w in texto for w in [
+        "ui ", "interfaz", "diseño", "dashboard", "componente", "vista", "pantalla",
+        "rediseñ", "estilos", "css", "layout", "animacion", "refactor", "pipeline",
+        "ci/cd", "lint", "script", "automatiz", "notificacion email", "webhook outbound",
+    ])
+    # Señales explícitas de que SÍ hay BD
+    con_db = any(w in texto for w in [
+        "tabla", "esquema", "modelo", "entidad", "relacion", "migración", "migracion",
+        "base de datos", "bd ", " db ", "postgresql", "mongodb", "mysql", "sqlite",
+        "almacen", "persist", "registro", "históric", "histori", "audit", "log ",
+        "store", "repositorio de datos",
+    ])
+    necesita_db = con_db or (not sin_db and any(w in texto for w in [
+        "crud", "guardar", "crear", "editar", "eliminar", "listar", "buscar",
+        "api", "endpoint", "servicio", "backend",
+    ]))
+
+    # Señales de Frontend
+    necesita_fe = any(w in texto for w in [
+        "ui", "interfaz", "pantalla", "vista", "dashboard", "componente", "formulario",
+        "página", "pagina", "portal", "web", "app", "frontend", "fe ", "usuario ve",
+        "diseño", "layout", "rediseñ", "flujo de usuario", "ux", "onboarding",
+    ])
+
+    # Señales de Backend / API
+    necesita_be = any(w in texto for w in [
+        "api", "endpoint", "servicio", "backend", "rest", "graphql", "webhook",
+        "autenticacion", "autenticación", "autorización", "autorizacion", "jwt",
+        "lógica de negocio", "logica", "procesamiento", "integración", "integracion",
+        "notificacion", "notificación", "email", "cron", "job", "queue", "worker",
+        "audit", "log ", "crud", "importar", "exportar", "reporte",
+    ])
+    # Si hay DB o FE probablemente también hay BE
+    if necesita_db or necesita_fe:
+        necesita_be = True
+
+    # Señales de Infra
+    necesita_infra = any(w in texto for w in [
+        "deploy", "despliegue", "docker", "ci/cd", "pipeline", "kubernetes", "k8s",
+        "servidor", "cloud", "aws", "gcp", "azure", "infra", "ambiente", "entorno",
+        "staging", "produccion", "producción", "monitoreo", "alerta", "escalab",
+        "contenedor", "helm", "terraform",
+    ])
+
+    # Test siempre aplica si hay al menos una capa de código
+    necesita_test = necesita_db or necesita_be or necesita_fe or necesita_infra
+
+    return {
+        "db":       necesita_db,
+        "backend":  necesita_be,
+        "frontend": necesita_fe,
+        "test":     necesita_test,
+        "infra":    necesita_infra,
+    }
+
+
+def detectar_complejidad(titulo: str, descripcion: str) -> str:
+    """
+    Estima la complejidad de la idea basándose en señales del texto.
+    Retorna: 'simple' | 'media' | 'compleja'
+
+    - simple:  1 flujo claro, sin integraciones externas, sin roles complejos
+    - media:   varios flujos, alguna integración o lógica de permisos
+    - compleja: múltiples módulos, integraciones externas, multi-tenant, alta carga, etc.
+    """
+    texto = (titulo + " " + descripcion).lower()
+    palabras = texto.split()
+
+    # Señales de alta complejidad
+    señales_alta = [
+        "multitenant", "multi-tenant", "multitenancy", "multi tenancy",
+        "microservicio", "microservice", "event sourcing", "cqrs",
+        "integración con", "integracion con", "third party", "terceros",
+        "concurrencia", "alta disponibilidad", "escalab", "sharding",
+        "múltiples módulos", "multiples modulos", "varios servicios",
+        "machine learning", "ia ", " ml ", "modelo de ia",
+        "tiempo real", "real time", "websocket", "streaming",
+        "migración de datos", "migracion de datos", "etl",
+        "compliance", "gdpr", "hipaa", "sox", "auditoria completa",
+        "sistema de pagos", "pasarela de pago", "facturación",
+        "roles y permisos", "rbac", "abac",
+    ]
+
+    # Señales de complejidad media
+    señales_media = [
+        "notificacion", "notificación", "email", "webhook",
+        "reporte", "exportar", "importar", "csv", "excel",
+        "autenticacion", "autenticación", "login", "registro",
+        "búsqueda", "busqueda", "filtros", "paginación",
+        "dashboard", "métricas", "estadísticas",
+        "integración", "integracion", "api externa",
+        "caché", "cache", "cola", "queue", "job",
+        "varios", "multiple", "diferentes", "distintos",
+    ]
+
+    score_alta  = sum(1 for s in señales_alta  if s in texto)
+    score_media = sum(1 for s in señales_media if s in texto)
+    longitud    = len(palabras)
+
+    if score_alta >= 2 or (score_alta >= 1 and longitud > 80):
+        return "compleja"
+    if score_alta == 1 or score_media >= 3 or longitud > 60:
+        return "media"
+    return "simple"
+
+
 def descomponer_idea(titulo: str, descripcion: str, stack: str) -> list:
     stack_tags = ["TypeScript", "React", "Node.js", "PostgreSQL"]
     if stack:
@@ -152,129 +271,318 @@ def descomponer_idea(titulo: str, descripcion: str, stack: str) -> list:
         if "docker"  in sl: stack_tags.append("Docker")
         if "graphql" in sl: stack_tags.append("GraphQL")
 
-    tareas = [
-        {
-            "nombre": f"[DB] Diseñar esquema de datos para: {titulo}",
-            "tipo": "DB", "orden": 1, "estimacion": "M",
-            "descripcion": (
-                f"Diseñar y documentar el modelo de datos para '{titulo}'.\n\n"
-                f"Contexto del dominio: {descripcion[:500]}\n\n"
-                "Definir:\n"
-                "- Entidades principales y sus atributos con tipos de dato precisos\n"
-                "- Relaciones (1:1, 1:N, N:M) y claves foráneas\n"
-                "- Índices para las queries más frecuentes del dominio\n"
-                "- Estrategia de migración (up/down) sin downtime si es posible\n"
-                "- Consideraciones de multi-tenancy, soft-delete o auditoría si aplica"
-            ),
-            "criterios": (
-                f"- Diagrama ER o esquema documentado en /docs para '{titulo}'\n"
-                "- Script de migración up/down listo y probado en local\n"
-                "- Índices definidos y justificados por las queries esperadas\n"
-                "- Revisión de tipos, constraints y normalización completada\n"
-                "- Aprobado por el equipo antes de implementar el backend"
-            ),
-            "stack": ["PostgreSQL", "TypeScript"],
-        },
-        {
-            "nombre": f"[Backend] Implementar API para: {titulo}",
-            "tipo": "Backend", "orden": 2, "estimacion": "L",
-            "descripcion": (
-                f"Crear los endpoints REST necesarios para '{titulo}'.\n\n"
-                f"Contexto del dominio: {descripcion[:500]}\n\n"
-                "Implementar:\n"
-                "- Rutas CRUD con verbos HTTP correctos (GET, POST, PUT/PATCH, DELETE)\n"
-                "- Validación de inputs con zod o joi (rechazar payloads inválidos con 400)\n"
-                "- Autenticación JWT: verificar token en cada ruta protegida, extraer claims relevantes\n"
-                "- Autorización por rol/tenant si aplica al dominio de esta idea\n"
-                "- Manejo de errores HTTP estándar (400, 401, 403, 404, 409, 500) sin exponer stack traces\n"
-                "- Logging estructurado (JSON) con request_id, user_id, duración y status en cada request\n"
-                "- Paginación con cursor o offset en endpoints de listado\n"
-                "- Documentación OpenAPI (swagger) de cada endpoint: params, body, responses\n"
-                "- Variables de entorno nuevas documentadas en .env.example"
-            ),
-            "criterios": (
-                f"- Todos los endpoints de '{titulo}' responden con status codes correctos\n"
-                "- Inputs inválidos retornan 400 con mensaje descriptivo del campo que falla\n"
-                "- Requests sin token o con token expirado retornan 401\n"
-                "- Tests unitarios de la lógica de negocio con cobertura > 70%\n"
-                "- Tests de integración que cubren flujo feliz y al menos 2 casos de error\n"
-                "- Ningún stack trace o dato interno expuesto en respuestas de error\n"
-                "- Documentación OpenAPI accesible en /api/docs\n"
-                "- .env.example actualizado con las nuevas variables"
-            ),
-            "stack": [t for t in stack_tags if t in ["Node.js", "Python", "TypeScript", "PostgreSQL", "MongoDB", "REST API", "GraphQL"]],
-        },
-        {
-            "nombre": f"[Frontend] Crear interfaz para: {titulo}",
-            "tipo": "Frontend", "orden": 3, "estimacion": "L",
-            "descripcion": (
-                f"Desarrollar componentes y vistas para '{titulo}'.\n\n"
-                f"Contexto del dominio: {descripcion[:400]}\n\n"
-                "Implementar:\n"
-                "- Componentes con estado local (useState/useReducer) y conexión al store global si aplica\n"
-                "- Estado de carga (skeleton o spinner), error (mensaje accionable) y vacío (empty state)\n"
-                "- Formularios con validación client-side usando react-hook-form + zod\n"
-                "- Feedback visual inmediato en acciones async (optimistic update o toast)\n"
-                "- Diseño responsive: mobile-first con breakpoints sm/md/lg\n"
-                "- Integración con API: fetch/axios con interceptor de token, manejo de 401 y retry"
-            ),
-            "criterios": (
-                f"- Todas las vistas de '{titulo}' renderizan sin errores en mobile y desktop\n"
-                "- Estados de loading, error y vacío implementados en cada listado o acción async\n"
-                "- Formularios validan en cliente antes de enviar y muestran errores por campo\n"
-                "- Token de autenticación se adjunta y renueva correctamente\n"
-                "- Sin console.errors ni warnings en build de producción\n"
-                "- Revisado en Chrome, Firefox y Safari"
-            ),
-            "stack": [t for t in stack_tags if t in ["React", "Next.js", "TypeScript", "Tailwind"]],
-        },
-        {
-            "nombre": f"[Test] QA e integración para: {titulo}",
-            "tipo": "Test", "orden": 4, "estimacion": "M",
-            "descripcion": (
-                f"Pruebas de integración y E2E para '{titulo}'.\n\n"
-                f"Contexto del dominio: {descripcion[:300]}\n\n"
-                "Cubrir:\n"
-                "- Flujo feliz completo de extremo a extremo (usuario → UI → API → BD)\n"
-                "- Al menos 3 casos edge específicos del dominio (datos límite, permisos, concurrencia)\n"
-                "- Manejo de errores de red (timeout, 500, 401)\n"
-                "- Validación de permisos: usuario sin rol adecuado no debe acceder\n"
-                "- Tests de regresión para bugs conocidos si los hay"
-            ),
-            "criterios": (
-                f"- Flujo principal de '{titulo}' cubierto con test E2E automatizado\n"
-                "- Al menos 3 casos edge documentados y testeados\n"
-                "- Tests corriendo en CI en cada PR sin flakiness\n"
-                "- Reporte de cobertura generado y visible en el PR\n"
-                "- Tiempo de ejecución del suite < 5 minutos"
-            ),
-            "stack": ["TypeScript"],
-        },
-    ]
+    capas       = detectar_capas(titulo, descripcion, stack)
+    complejidad = detectar_complejidad(titulo, descripcion)
+    print(f"  🔎 Capas: { {k for k, v in capas.items() if v} } | Complejidad: {complejidad}")
 
-    if "docker" in stack.lower() or "infra" in descripcion.lower() or "deploy" in descripcion.lower():
-        tareas.append({
-            "nombre": f"[Infra] Configurar deploy para: {titulo}",
-            "tipo": "Infra", "orden": 5, "estimacion": "M",
-            "descripcion": (
-                f"Pipeline CI/CD y entorno de deploy para '{titulo}'.\n\n"
-                f"Contexto del dominio: {descripcion[:300]}\n\n"
-                "Configurar:\n"
-                "- Dockerfile multi-stage optimizado (build + runtime mínimo)\n"
-                "- Variables de entorno por ambiente (dev/staging/prod) en el servidor\n"
-                "- Health check endpoint que valide conexión a BD y dependencias críticas\n"
-                "- Estrategia de rollback: deploy anterior disponible en < 2 minutos\n"
-                "- Alertas básicas: error rate > 1% o latencia p95 > 2s"
-            ),
-            "criterios": (
-                "- Pipeline CI ejecuta lint + tests + build en cada PR\n"
-                "- Deploy automático a staging en merge a main\n"
-                "- Health check respondiendo 200 con status de dependencias\n"
-                "- Rollback probado y documentado en runbook\n"
-                "- Variables de entorno documentadas por ambiente"
-            ),
-            "stack": ["Docker"],
-        })
+    tareas = []
+    orden  = 1
+
+    # ── DB ─────────────────────────────────────────────────────────────────────
+    if capas["db"]:
+        if complejidad == "compleja":
+            # Separar diseño de implementación/migración
+            tareas.append({
+                "nombre": f"[DB] Diseñar esquema de datos para: {titulo}",
+                "tipo": "DB", "orden": orden, "estimacion": "M",
+                "descripcion": (
+                    f"Diseñar y documentar el modelo de datos para '{titulo}'.\n\n"
+                    f"Contexto: {descripcion[:400]}\n\n"
+                    "- Entidades, atributos y tipos de dato precisos\n"
+                    "- Relaciones (1:1, 1:N, N:M) y claves foráneas\n"
+                    "- Consideraciones de multi-tenancy, soft-delete o auditoría\n"
+                    "- Revisión con el equipo antes de implementar"
+                ),
+                "criterios": (
+                    "- Diagrama ER documentado en /docs\n"
+                    "- Aprobado por el equipo antes de escribir migraciones"
+                ),
+                "stack": ["PostgreSQL", "TypeScript"],
+            })
+            orden += 1
+            tareas.append({
+                "nombre": f"[DB] Implementar migraciones e índices para: {titulo}",
+                "tipo": "DB", "orden": orden, "estimacion": "M",
+                "descripcion": (
+                    f"Escribir y validar las migraciones para el esquema aprobado de '{titulo}'.\n\n"
+                    "- Scripts up/down sin downtime si es posible\n"
+                    "- Índices justificados por las queries más frecuentes\n"
+                    "- Datos de seed para desarrollo y staging"
+                ),
+                "criterios": (
+                    "- Migraciones ejecutan sin error en local y staging\n"
+                    "- Rollback probado\n"
+                    "- Índices creados y verificados con EXPLAIN"
+                ),
+                "stack": ["PostgreSQL", "TypeScript"],
+            })
+            orden += 1
+        else:
+            # Simple o media: una sola tarea de DB
+            tareas.append({
+                "nombre": f"[DB] Diseñar e implementar esquema para: {titulo}",
+                "tipo": "DB", "orden": orden, "estimacion": "S" if complejidad == "simple" else "M",
+                "descripcion": (
+                    f"Diseñar y aplicar el modelo de datos para '{titulo}'.\n\n"
+                    f"Contexto: {descripcion[:400]}\n\n"
+                    "- Entidades, relaciones e índices necesarios\n"
+                    "- Script de migración up/down\n"
+                    "- Consideraciones de normalización y constraints"
+                ),
+                "criterios": (
+                    "- Esquema documentado en /docs\n"
+                    "- Migración ejecuta sin error en local\n"
+                    "- Revisión de tipos y constraints completada"
+                ),
+                "stack": ["PostgreSQL", "TypeScript"],
+            })
+            orden += 1
+
+    # ── BACKEND ────────────────────────────────────────────────────────────────
+    if capas["backend"]:
+        if complejidad == "compleja":
+            # Separar lógica de negocio de la capa de API
+            tareas.append({
+                "nombre": f"[Backend] Implementar lógica de negocio para: {titulo}",
+                "tipo": "Backend", "orden": orden, "estimacion": "L",
+                "descripcion": (
+                    f"Implementar los casos de uso y servicios internos de '{titulo}'.\n\n"
+                    f"Contexto: {descripcion[:400]}\n\n"
+                    "- Servicios/use-cases desacoplados del transporte HTTP\n"
+                    "- Validación de reglas de negocio (no solo de inputs)\n"
+                    "- Manejo de transacciones y rollback\n"
+                    "- Logging estructurado con contexto de tenant/usuario\n"
+                    "- Tests unitarios de cada caso de uso"
+                ),
+                "criterios": (
+                    "- Cada caso de uso tiene tests unitarios con cobertura > 80%\n"
+                    "- Lógica sin dependencia directa de HTTP o BD (inversión de dependencias)\n"
+                    "- Errores de negocio tipados y diferenciados de errores técnicos"
+                ),
+                "stack": [t for t in stack_tags if t in ["Node.js", "Python", "TypeScript", "PostgreSQL", "MongoDB"]],
+            })
+            orden += 1
+            tareas.append({
+                "nombre": f"[Backend] Implementar API y controladores para: {titulo}",
+                "tipo": "Backend", "orden": orden, "estimacion": "M",
+                "descripcion": (
+                    f"Exponer los servicios de '{titulo}' via HTTP.\n\n"
+                    "- Rutas con verbos HTTP correctos\n"
+                    "- Validación de inputs con zod/joi (400 en payload inválido)\n"
+                    "- Autenticación JWT y autorización por rol/tenant\n"
+                    "- Manejo de errores HTTP sin exponer stack traces\n"
+                    "- Documentación OpenAPI de cada endpoint"
+                ),
+                "criterios": (
+                    "- Endpoints responden con status codes correctos\n"
+                    "- Tests de integración cubren flujo feliz y casos de error\n"
+                    "- OpenAPI accesible en /api/docs\n"
+                    "- .env.example actualizado"
+                ),
+                "stack": [t for t in stack_tags if t in ["Node.js", "Python", "TypeScript", "REST API", "GraphQL"]],
+            })
+            orden += 1
+        else:
+            tareas.append({
+                "nombre": f"[Backend] Implementar lógica y API para: {titulo}",
+                "tipo": "Backend", "orden": orden, "estimacion": "S" if complejidad == "simple" else "L",
+                "descripcion": (
+                    f"Crear lógica de negocio y endpoints para '{titulo}'.\n\n"
+                    f"Contexto: {descripcion[:400]}\n\n"
+                    "- Rutas con verbos HTTP correctos\n"
+                    "- Validación de inputs, autenticación JWT\n"
+                    "- Manejo de errores sin exponer stack traces\n"
+                    "- Logging estructurado y documentación OpenAPI"
+                ),
+                "criterios": (
+                    "- Endpoints responden con status codes correctos\n"
+                    "- Tests unitarios con cobertura > 70%\n"
+                    "- OpenAPI accesible en /api/docs\n"
+                    "- .env.example actualizado"
+                ),
+                "stack": [t for t in stack_tags if t in ["Node.js", "Python", "TypeScript", "PostgreSQL", "MongoDB", "REST API", "GraphQL"]],
+            })
+            orden += 1
+
+    # ── FRONTEND ───────────────────────────────────────────────────────────────
+    if capas["frontend"]:
+        if complejidad == "compleja":
+            tareas.append({
+                "nombre": f"[Frontend] Implementar componentes base para: {titulo}",
+                "tipo": "Frontend", "orden": orden, "estimacion": "M",
+                "descripcion": (
+                    f"Crear los componentes reutilizables necesarios para '{titulo}'.\n\n"
+                    f"Contexto: {descripcion[:300]}\n\n"
+                    "- Componentes atómicos y moleculares (sin lógica de negocio)\n"
+                    "- Estados: loading (skeleton), error, vacío\n"
+                    "- Diseño responsive mobile-first\n"
+                    "- Storybook o documentación visual si aplica"
+                ),
+                "criterios": (
+                    "- Componentes renderizan sin errores en mobile y desktop\n"
+                    "- Estados de loading, error y vacío implementados\n"
+                    "- Sin console.errors en build de producción"
+                ),
+                "stack": [t for t in stack_tags if t in ["React", "Next.js", "TypeScript", "Tailwind"]],
+            })
+            orden += 1
+            tareas.append({
+                "nombre": f"[Frontend] Integrar flujos y lógica de negocio para: {titulo}",
+                "tipo": "Frontend", "orden": orden, "estimacion": "L",
+                "descripcion": (
+                    f"Conectar los componentes de '{titulo}' con la API y el estado global.\n\n"
+                    "- Integración con API: fetch/axios con interceptor de token y manejo de 401\n"
+                    "- Formularios con react-hook-form + zod\n"
+                    "- Feedback en acciones async (toast, optimistic update)\n"
+                    "- Manejo de sesión y redirecciones de autenticación"
+                ),
+                "criterios": (
+                    "- Flujos completos funcionando end-to-end en desarrollo\n"
+                    "- Formularios validan antes de enviar y muestran errores por campo\n"
+                    "- Revisado en Chrome, Firefox y Safari"
+                ),
+                "stack": [t for t in stack_tags if t in ["React", "Next.js", "TypeScript", "Tailwind"]],
+            })
+            orden += 1
+        else:
+            tareas.append({
+                "nombre": f"[Frontend] Crear interfaz para: {titulo}",
+                "tipo": "Frontend", "orden": orden, "estimacion": "S" if complejidad == "simple" else "L",
+                "descripcion": (
+                    f"Desarrollar componentes y vistas para '{titulo}'.\n\n"
+                    f"Contexto: {descripcion[:400]}\n\n"
+                    "- Estados de carga, error y vacío\n"
+                    "- Formularios con validación client-side\n"
+                    "- Diseño responsive mobile-first\n"
+                    "- Integración con API con manejo de token"
+                ),
+                "criterios": (
+                    "- Vistas funcionando en mobile y desktop\n"
+                    "- Formularios validan antes de enviar\n"
+                    "- Sin console.errors en producción"
+                ),
+                "stack": [t for t in stack_tags if t in ["React", "Next.js", "TypeScript", "Tailwind"]],
+            })
+            orden += 1
+
+    # ── TEST ───────────────────────────────────────────────────────────────────
+    if capas["test"]:
+        if complejidad == "compleja":
+            tareas.append({
+                "nombre": f"[Test] Tests unitarios y de integración para: {titulo}",
+                "tipo": "Test", "orden": orden, "estimacion": "M",
+                "descripcion": (
+                    f"Tests de lógica interna para '{titulo}'.\n\n"
+                    f"Contexto: {descripcion[:300]}\n\n"
+                    "- Tests unitarios de servicios y casos de uso\n"
+                    "- Tests de integración API ↔ BD\n"
+                    "- Casos edge del dominio: datos límite, permisos, concurrencia"
+                ),
+                "criterios": (
+                    "- Cobertura > 70% en lógica de negocio\n"
+                    "- Al menos 3 casos edge testeados\n"
+                    "- Tests en CI sin flakiness"
+                ),
+                "stack": ["TypeScript"],
+            })
+            orden += 1
+            tareas.append({
+                "nombre": f"[Test] Tests E2E para: {titulo}",
+                "tipo": "Test", "orden": orden, "estimacion": "M",
+                "descripcion": (
+                    f"Tests end-to-end del flujo completo de '{titulo}'.\n\n"
+                    "- Flujo feliz completo (usuario → UI → API → BD)\n"
+                    "- Validación de permisos y roles\n"
+                    "- Manejo de errores de red (timeout, 500, 401)\n"
+                    "- Tests de regresión para bugs conocidos"
+                ),
+                "criterios": (
+                    "- Flujo principal cubierto con test E2E automatizado\n"
+                    "- Tests en CI en cada PR\n"
+                    "- Tiempo de ejecución < 5 minutos"
+                ),
+                "stack": ["TypeScript"],
+            })
+            orden += 1
+        else:
+            tareas.append({
+                "nombre": f"[Test] QA para: {titulo}",
+                "tipo": "Test", "orden": orden, "estimacion": "S" if complejidad == "simple" else "M",
+                "descripcion": (
+                    f"Pruebas para '{titulo}'.\n\n"
+                    f"Contexto: {descripcion[:300]}\n\n"
+                    "- Flujo feliz de las capas implementadas\n"
+                    "- Al menos 2 casos edge del dominio\n"
+                    "- Validación de permisos si aplica"
+                ),
+                "criterios": (
+                    "- Flujo principal cubierto con tests\n"
+                    "- Tests en CI sin flakiness\n"
+                    "- Reporte de cobertura generado"
+                ),
+                "stack": ["TypeScript"],
+            })
+            orden += 1
+
+    # ── INFRA ──────────────────────────────────────────────────────────────────
+    if capas["infra"]:
+        if complejidad == "compleja":
+            tareas.append({
+                "nombre": f"[Infra] Configurar ambientes para: {titulo}",
+                "tipo": "Infra", "orden": orden, "estimacion": "M",
+                "descripcion": (
+                    f"Infraestructura base para '{titulo}'.\n\n"
+                    f"Contexto: {descripcion[:300]}\n\n"
+                    "- Dockerfile multi-stage optimizado\n"
+                    "- Variables de entorno por ambiente (dev/staging/prod)\n"
+                    "- Health check que valide BD y dependencias críticas"
+                ),
+                "criterios": (
+                    "- Imagen Docker construye sin errores\n"
+                    "- Variables documentadas por ambiente\n"
+                    "- Health check respondiendo 200"
+                ),
+                "stack": ["Docker"],
+            })
+            orden += 1
+            tareas.append({
+                "nombre": f"[Infra] Pipeline CI/CD y monitoreo para: {titulo}",
+                "tipo": "Infra", "orden": orden, "estimacion": "M",
+                "descripcion": (
+                    f"Pipeline y observabilidad para '{titulo}'.\n\n"
+                    "- CI: lint + tests + build en cada PR\n"
+                    "- CD: deploy automático a staging en merge a main\n"
+                    "- Rollback en < 2 minutos\n"
+                    "- Alertas: error rate > 1% o latencia p95 > 2s"
+                ),
+                "criterios": (
+                    "- Pipeline CI verde en cada PR\n"
+                    "- Deploy a staging automático\n"
+                    "- Rollback probado y documentado en runbook\n"
+                    "- Alertas configuradas"
+                ),
+                "stack": ["Docker"],
+            })
+            orden += 1
+        else:
+            tareas.append({
+                "nombre": f"[Infra] Configurar deploy para: {titulo}",
+                "tipo": "Infra", "orden": orden, "estimacion": "M",
+                "descripcion": (
+                    f"Pipeline CI/CD para '{titulo}'.\n\n"
+                    f"Contexto: {descripcion[:300]}\n\n"
+                    "- Dockerfile multi-stage\n"
+                    "- Variables de entorno por ambiente\n"
+                    "- Health check y rollback strategy"
+                ),
+                "criterios": (
+                    "- Pipeline CI en cada PR\n"
+                    "- Deploy automático a staging\n"
+                    "- Rollback documentado en runbook"
+                ),
+                "stack": ["Docker"],
+            })
+            orden += 1
 
     return tareas
 
@@ -314,8 +622,9 @@ def procesar_ideas():
         print("✨ No hay ideas pendientes. Nada que procesar.")
         return
 
-    ideas_a_procesar = ideas[:MAX_IDEAS_POR_EJECUCION]
-    print(f"📋 Ideas a procesar: {len(ideas_a_procesar)} de {len(ideas)} pendientes\n")
+    ideas_a_procesar = ideas[:MAX_IDEAS] if MAX_IDEAS else ideas
+    limite_txt = f"(límite: {MAX_IDEAS})" if MAX_IDEAS else "(sin límite)"
+    print(f"📋 Ideas a procesar: {len(ideas_a_procesar)} de {len(ideas)} pendientes {limite_txt}\n")
 
     for idea in ideas_a_procesar:
         idea_id     = idea["id"]
