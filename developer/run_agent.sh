@@ -13,7 +13,7 @@ if [ -f "$AGENT_DIR/.env" ]; then
 fi
 
 # Validar variables requeridas
-for var in NOTION_TOKEN NOTION_DB_TAREAS BASE_PATH; do
+for var in NOTION_TOKEN NOTION_DB_TAREAS BASE_PATH RAMA_BASE; do
   if [ -z "${!var}" ]; then
     echo "❌ Variable requerida no encontrada: $var"
     exit 1
@@ -26,6 +26,9 @@ if [ ! -d "$BASE_PATH" ]; then
   exit 1
 fi
 
+# Default para STANDARDS_DIR si no está definida
+export STANDARDS_DIR="${STANDARDS_DIR:-_standards}"
+
 # Límite de tareas opcional
 if [ -n "$1" ]; then
   export MAX_TAREAS_POR_EJECUCION="$1"
@@ -34,6 +37,8 @@ fi
 echo ""
 echo "👨‍💻 Developer Agent"
 echo "📁 Base: $BASE_PATH"
+echo "🌿 Rama base: $RAMA_BASE"
+echo "📐 Estándares: $BASE_PATH/$STANDARDS_DIR"
 [ -n "$MAX_TAREAS_POR_EJECUCION" ] && echo "📋 Límite: $MAX_TAREAS_POR_EJECUCION tareas"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 

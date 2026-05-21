@@ -6,18 +6,33 @@ específicas para cada proyecto referenciando archivos, patrones y convenciones 
 ## Arquitectura
 
 ```
-C:/documentos/work/
-├── CLAUDE.md                  ← arquitectura global y relaciones entre proyectos
-├── backoffice/                ← proyecto Go + React
+BASE_PATH/
+├── CLAUDE.md                  ← (opcional) arquitectura global del ecosistema
+├── _standards/                ← reglas de arquitectura por stack/tipo
+│   ├── golang_architecture_monolith.md
+│   └── node_architecture_api.md
+├── backoffice/                ← proyecto existente
 │   ├── CLAUDE.md o README.md
 │   └── ...código
-├── auth-service/
-└── scrum-master-agent/        ← este repositorio
-    ├── notion_tool.py         ← CRUD de Notion
-    ├── scrum_master_local.md  ← prompt del agente
-    ├── run_agent.sh           ← script de arranque
-    └── .env                   ← credenciales (no subir a git)
+├── auth-service/              ← proyecto existente
+└── ai-agents/                 ← este repositorio
+    └── scrum-master/
+        ├── notion_tool.py         ← CRUD de Notion
+        ├── scrum_master_local.md  ← prompt del agente
+        ├── run_agent.sh           ← script de arranque
+        └── .env                   ← credenciales (no subir a git)
 ```
+
+### Estándares de arquitectura (`_standards/`)
+
+Los archivos `.md` en esta carpeta definen reglas obligatorias para crear
+proyectos nuevos. El agente identifica el stack y tipo de proyecto de la idea,
+busca el estándar correspondiente y genera tareas que lo referencian.
+
+Si `CLAUDE.md` no existe y el workspace está vacío, el agente depende de estos
+estándares para saber cómo estructurar un proyecto nuevo.
+
+**Convención de nombre:** `<stack>_architecture_<tipo>.md`
 
 ## Requisitos
 
@@ -82,4 +97,7 @@ Para una idea como *"Agregar feature de exportación de reportes en backoffice"*
 | NOTION_DB_EPICAS | ✅ | ID de la base de datos de Épicas |
 | NOTION_DB_IDEAS | ✅ | ID de la base de datos de Ideas |
 | NOTION_DB_TAREAS | ✅ | ID de la base de datos de Tareas técnicas |
+| BASE_PATH | ✅ | Ruta absoluta al workspace raíz |
+| RAMA_BASE | ✅ | Rama git contra la que se validan los proyectos (ej: `main`) |
+| STANDARDS_DIR | ❌ | Carpeta de estándares dentro de BASE_PATH (default: `_standards`) |
 | MAX_IDEAS_POR_EJECUCION | ❌ | Límite de ideas por ejecución (sin límite si no se define) |

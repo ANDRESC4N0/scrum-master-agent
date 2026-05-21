@@ -31,10 +31,48 @@ Ambos agentes dejan comentarios en las tarjetas de Notion:
 - **Scrum Master** → aclara criterios de aceptación o agrega contexto
 - **Developer** → reporta bloqueos, dudas técnicas o decisiones tomadas
 
+## Workspace y estándares de arquitectura
+
+Los agentes trabajan sobre un directorio base (`BASE_PATH`) que puede estar
+vacío o contener proyectos existentes. Ambos agentes buscan reglas de
+arquitectura en una carpeta de estándares dentro de ese directorio.
+
+### Estructura esperada del workspace
+
+```
+BASE_PATH/
+├── CLAUDE.md               ← (opcional) Arquitectura global del ecosistema
+├── _standards/             ← Reglas de arquitectura por stack/tipo
+│   ├── golang_architecture_monolith.md
+│   ├── golang_architecture_api.md
+│   └── node_architecture_api.md
+├── proyecto-a/             ← Proyecto existente
+└── proyecto-b/             ← Proyecto existente
+```
+
+### Carpeta `_standards/`
+
+Contiene archivos `.md` con reglas obligatorias de desarrollo. Cada archivo
+define la estructura de carpetas, convenciones de código, patrones y reglas
+para un stack + tipo de proyecto específico.
+
+**Convención de nombre:** `<stack>_architecture_<tipo>.md`
+
+Los agentes las usan así:
+- **Scrum Master** — al generar tareas para un proyecto nuevo, referencia el
+  estándar aplicable en la descripción de cada tarea
+- **Developer** — al implementar un proyecto nuevo, sigue estrictamente
+  las reglas del estándar referenciado
+
+Si `CLAUDE.md` no existe y el workspace está vacío, los agentes dependen
+enteramente de estos estándares para crear proyectos desde cero.
+
+La carpeta se configura vía la variable `STANDARDS_DIR` (por defecto `_standards`).
+
 ## Configuración
 
 Cada agente tiene su propio `.env` con sus variables específicas.
-Ambos comparten `BASE_PATH` y `NOTION_TOKEN`.
+Ambos comparten `BASE_PATH`, `RAMA_BASE`, `STANDARDS_DIR` y `NOTION_TOKEN`.
 
 ## Ejecución
 

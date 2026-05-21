@@ -106,6 +106,7 @@ def leer_tareas():
             "idea_id":     idea_ids[0] if idea_ids else None,
             "idea_titulo": idea_titulo,
             "epica_ids":   get_relation_ids(p, "Épica"),
+            "depende_de":  get_relation_ids(p, "Depende de"),
         })
 
     print(json.dumps(tareas, ensure_ascii=False, indent=2))
@@ -145,6 +146,7 @@ def leer_tarea(payload: dict):
         "criterios":   get_rich_text(page, "Criterios de aceptación"),
         "stack":       get_multi_select(page, "Stack"),
         "idea_id":     idea_ids[0] if idea_ids else None,
+        "depende_de":  get_relation_ids(page, "Depende de"),
         "comentarios": comentarios,
     }
     print(json.dumps(tarea, ensure_ascii=False, indent=2))

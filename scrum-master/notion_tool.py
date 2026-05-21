@@ -114,7 +114,8 @@ def crear_tarea(payload: dict):
       "criterios":   "- criterio 1\n- criterio 2",
       "stack":       ["Node.js", "TypeScript"],
       "idea_id":     "uuid",
-      "epica_id":    "uuid"  (opcional)
+      "epica_id":    "uuid",         (opcional)
+      "depende_de":  ["uuid", ...]   (opcional, IDs de tareas de las que depende)
     }
     """
     props = {
@@ -130,6 +131,11 @@ def crear_tarea(payload: dict):
     }
     if payload.get("epica_id"):
         props["Épica"] = prop_relation([payload["epica_id"]])
+    if payload.get("depende_de"):
+        props["Depende de"] = prop_relation(
+            payload["depende_de"] if isinstance(payload["depende_de"], list)
+            else [payload["depende_de"]]
+        )
 
     result = http("POST", "https://api.notion.com/v1/pages", {
         "parent": {"database_id": DB_TAREAS},
