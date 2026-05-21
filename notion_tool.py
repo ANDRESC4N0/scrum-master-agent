@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
 notion_tool.py — Herramienta CRUD de Notion para el agente Scrum Master.
-Claude Code la llama con argumentos JSON para leer y escribir en los tableros.
 
 Uso:
   python3 notion_tool.py leer_ideas
   python3 notion_tool.py leer_epicas
-  python3 notion_tool.py crear_tarea   '<json>'
+  python3 notion_tool.py crear_tarea    '<json>'
   python3 notion_tool.py actualizar_idea '<json>'
 """
 
@@ -48,59 +47,41 @@ def http(method: str, url: str, body: dict = None) -> dict:
         raise RuntimeError(f"{method} {url} → {e.code}: {error_body}")
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
-def get_title(page: dict, field: str) -> str:
-    parts = page.get("properties", {}).get(field, {}).get("title", [])
-    return "".join(p.get("plain_text", "") for p in parts).strip()
+def get_title(page, field):
+    return "".join(p.get("plain_text","") for p in page.get("properties",{}).get(field,{}).get("title",[])).strip()
 
-def get_rich_text(page: dict, field: str) -> str:
-    parts = page.get("properties", {}).get(field, {}).get("rich_text", [])
-    return "".join(p.get("plain_text", "") for p in parts).strip()
+def get_rich_text(page, field):
+    return "".join(p.get("plain_text","") for p in page.get("properties",{}).get(field,{}).get("rich_text",[])).strip()
 
-def get_select(page: dict, field: str) -> str:
-    sel = page.get("properties", {}).get(field, {}).get("select")
-    return sel.get("name", "") if sel else ""
+def get_select(page, field):
+    sel = page.get("properties",{}).get(field,{}).get("select")
+    return sel.get("name","") if sel else ""
 
-def get_relation_ids(page: dict, field: str) -> list:
-    return [r["id"] for r in page.get("properties", {}).get(field, {}).get("relation", [])]
+def get_relation_ids(page, field):
+    return [r["id"] for r in page.get("properties",{}).get(field,{}).get("relation",[])]
 
-def prop_title(text: str) -> dict:
-    return {"title": [{"text": {"content": str(text)}}]}
-
-def prop_rich_text(text: str) -> dict:
-    return {"rich_text": [{"text": {"content": str(text)[:2000]}}]}
-
-def prop_select(option: str) -> dict:
-    return {"select": {"name": str(option)}}
-
-def prop_multi_select(options: list) -> dict:
-    return {"multi_select": [{"name": str(o)} for o in options if o]}
-
-def prop_number(n) -> dict:
-    return {"number": int(n)}
-
-def prop_relation(ids: list) -> dict:
-    return {"relation": [{"id": i} for i in ids]}
+def prop_title(text):      return {"title":      [{"text": {"content": str(text)}}]}
+def prop_rich_text(text):  return {"rich_text":  [{"text": {"content": str(text)[:2000]}}]}
+def prop_select(option):   return {"select":     {"name": str(option)}}
+def prop_number(n):        return {"number":     int(n)}
+def prop_relation(ids):    return {"relation":   [{"id": i} for i in ids]}
+def prop_multi_select(opts): return {"multi_select": [{"name": str(o)} for o in opts if o]}
 
 # ── Operaciones ────────────────────────────────────────────────────────────────
 def leer_epicas():
-    """Lee todas las épicas activas."""
     result = http("POST", f"https://api.notion.com/v1/databases/{DB_EPICAS}/query", {
         "filter": {"property": "Estado", "select": {"equals": "Activa"}}
     })
-    epicas = []
-    for p in result.get("results", []):
-        epicas.append({
-            "id":          p["id"],
-            "nombre":      get_title(p, "Épica"),
-            "descripcion": get_rich_text(p, "Descripción"),
-            "objetivo":    get_rich_text(p, "Objetivo"),
-            "estado":      get_select(p, "Estado"),
-        })
+    epicas = [{
+        "id":          p["id"],
+        "nombre":      get_title(p, "Épica"),
+        "descripcion": get_rich_text(p, "Descripción"),
+        "objetivo":    get_rich_text(p, "Objetivo"),
+    } for p in result.get("results", [])]
     print(json.dumps(epicas, ensure_ascii=False, indent=2))
 
 
 def leer_ideas():
-    """Lee todas las ideas con estado Pendiente, ordenadas por prioridad."""
     result = http("POST", f"https://api.notion.com/v1/databases/{DB_IDEAS}/query", {
         "filter": {"property": "Estado", "select": {"equals": "Pendiente"}},
         "sorts":  [{"property": "Prioridad", "direction": "ascending"}]
@@ -115,6 +96,7 @@ def leer_ideas():
             "descripcion": get_rich_text(p, "Descripción"),
             "prioridad":   get_select(p, "Prioridad"),
             "stack":       get_rich_text(p, "Stack sugerido"),
+            "proyecto":    get_rich_text(p, "Proyecto"),   # ← ruta relativa
             "epica_ids":   get_relation_ids(p, "Épica"),
         })
     print(json.dumps(ideas, ensure_ascii=False, indent=2))
@@ -122,18 +104,17 @@ def leer_ideas():
 
 def crear_tarea(payload: dict):
     """
-    Crea una tarea técnica en Notion.
-    Payload esperado:
+    Payload:
     {
       "nombre":      "Nombre de la tarea",
-      "tipo":        "Backend",           -- DB | Backend | Frontend | Test | Infra
+      "tipo":        "Backend",
       "orden":       1,
-      "estimacion":  "M",                 -- S | M | L | XL
-      "descripcion": "Descripción técnica detallada",
-      "criterios":   "- Criterio 1\n- Criterio 2",
+      "estimacion":  "M",
+      "descripcion": "...",
+      "criterios":   "- criterio 1\n- criterio 2",
       "stack":       ["Node.js", "TypeScript"],
-      "idea_id":     "page-uuid-de-la-idea",
-      "epica_id":    "page-uuid-de-la-epica"   -- opcional
+      "idea_id":     "uuid",
+      "epica_id":    "uuid"  (opcional)
     }
     """
     props = {
@@ -159,19 +140,16 @@ def crear_tarea(payload: dict):
 
 def actualizar_idea(payload: dict):
     """
-    Actualiza propiedades de una idea.
-    Payload esperado:
+    Payload:
     {
-      "id":       "page-uuid-de-la-idea",
-      "estado":   "En progreso",   -- opcional
-      "epica_id": "uuid"           -- opcional
+      "id":       "uuid",
+      "estado":   "En progreso",  (opcional)
+      "epica_id": "uuid"          (opcional)
     }
     """
     props = {}
-    if "estado" in payload:
-        props["Estado"] = prop_select(payload["estado"])
-    if "epica_id" in payload:
-        props["Épica"] = prop_relation([payload["epica_id"]])
+    if "estado"   in payload: props["Estado"] = prop_select(payload["estado"])
+    if "epica_id" in payload: props["Épica"]  = prop_relation([payload["epica_id"]])
 
     if not props:
         print(json.dumps({"ok": False, "error": "Nada que actualizar"}))
@@ -183,10 +161,10 @@ def actualizar_idea(payload: dict):
 
 # ── Dispatcher ─────────────────────────────────────────────────────────────────
 COMANDOS = {
-    "leer_epicas":    lambda _: leer_epicas(),
-    "leer_ideas":     lambda _: leer_ideas(),
-    "crear_tarea":    lambda arg: crear_tarea(json.loads(arg)),
-    "actualizar_idea": lambda arg: actualizar_idea(json.loads(arg)),
+    "leer_epicas":     lambda _: leer_epicas(),
+    "leer_ideas":      lambda _: leer_ideas(),
+    "crear_tarea":     lambda a: crear_tarea(json.loads(a)),
+    "actualizar_idea": lambda a: actualizar_idea(json.loads(a)),
 }
 
 if __name__ == "__main__":
@@ -194,7 +172,4 @@ if __name__ == "__main__":
         print(f"Uso: python3 notion_tool.py <comando> [payload_json]")
         print(f"Comandos: {', '.join(COMANDOS)}")
         sys.exit(1)
-
-    comando = sys.argv[1]
-    argumento = sys.argv[2] if len(sys.argv) > 2 else ""
-    COMANDOS[comando](argumento)
+    COMANDOS[sys.argv[1]](sys.argv[2] if len(sys.argv) > 2 else "")
