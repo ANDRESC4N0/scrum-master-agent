@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Scrum Master Agent — Procesa ideas de negocio y genera tareas técnicas en Notion.
-Usa la API REST de Notion directamente (sin conector MCP).
+Usa la API REST de Notion + Claude API para análisis inteligente de ideas.
 """
 
 import os
@@ -17,28 +17,32 @@ def require_env(name: str) -> str:
         raise EnvironmentError(f"Variable de entorno requerida no encontrada: {name}")
     return value
 
-NOTION_TOKEN     = require_env("NOTION_TOKEN")
-DB_EPICAS        = require_env("NOTION_DB_EPICAS")
-DB_IDEAS         = require_env("NOTION_DB_IDEAS")
-DB_TAREAS        = require_env("NOTION_DB_TAREAS")
+NOTION_TOKEN  = require_env("NOTION_TOKEN")
+DB_EPICAS     = require_env("NOTION_DB_EPICAS")
+DB_IDEAS      = require_env("NOTION_DB_IDEAS")
+DB_TAREAS     = require_env("NOTION_DB_TAREAS")
+ANTHROPIC_KEY = require_env("ANTHROPIC_API_KEY")
 
 # Opcional: cuántas ideas procesar por ejecución. Sin límite si no se define.
-_max_raw         = os.environ.get("MAX_IDEAS_POR_EJECUCION", "").strip()
-MAX_IDEAS        = int(_max_raw) if _max_raw.isdigit() else None
+_max_raw  = os.environ.get("MAX_IDEAS_POR_EJECUCION", "").strip()
+MAX_IDEAS = int(_max_raw) if _max_raw.isdigit() else None
 
-HEADERS = {
+NOTION_HEADERS = {
     "Authorization": f"Bearer {NOTION_TOKEN}",
     "Content-Type": "application/json",
     "Notion-Version": "2022-06-28",
 }
 
-MAX_IDEAS_POR_EJECUCION = 3
+ANTHROPIC_HEADERS = {
+    "x-api-key": ANTHROPIC_KEY,
+    "anthropic-version": "2023-06-01",
+    "content-type": "application/json",
+}
 
-# ── Cliente HTTP mínimo ────────────────────────────────────────────────────────
-def notion_request(method: str, path: str, body: dict = None) -> dict:
-    url = f"https://api.notion.com/v1{path}"
-    data = json.dumps(body).encode() if body else None
-    req = urllib.request.Request(url, data=data, headers=HEADERS, method=method)
+# ── Cliente HTTP ───────────────────────────────────────────────────────────────
+def http_post(url: str, headers: dict, body: dict) -> dict:
+    data = json.dumps(body).encode()
+    req  = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req) as resp:
             return json.loads(resp.read())
@@ -48,52 +52,67 @@ def notion_request(method: str, path: str, body: dict = None) -> dict:
             error_body = json.loads(raw)
         except json.JSONDecodeError:
             error_body = raw.decode(errors="replace")
-        raise RuntimeError(f"Notion API {method} {path} → {e.code}: {error_body}")
+        raise RuntimeError(f"HTTP POST {url} → {e.code}: {error_body}")
 
 
-def query_db(db_id: str, filters: dict = None, sorts: list = None) -> list:
+def http_patch(url: str, headers: dict, body: dict) -> dict:
+    data = json.dumps(body).encode()
+    req  = urllib.request.Request(url, data=data, headers=headers, method="PATCH")
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        try:
+            error_body = json.loads(raw)
+        except json.JSONDecodeError:
+            error_body = raw.decode(errors="replace")
+        raise RuntimeError(f"HTTP PATCH {url} → {e.code}: {error_body}")
+
+
+# ── Cliente Notion ─────────────────────────────────────────────────────────────
+def notion_query(db_id: str, filters: dict = None, sorts: list = None) -> list:
     body = {}
-    if filters:
-        body["filter"] = filters
-    if sorts:
-        body["sorts"] = sorts
-    result = notion_request("POST", f"/databases/{db_id}/query", body)
+    if filters: body["filter"] = filters
+    if sorts:   body["sorts"]  = sorts
+    result = http_post(
+        f"https://api.notion.com/v1/databases/{db_id}/query",
+        NOTION_HEADERS, body
+    )
     return result.get("results", [])
 
 
-def create_page(db_id: str, properties: dict) -> dict:
-    body = {
-        "parent": {"database_id": db_id},
-        "properties": properties,
-    }
-    return notion_request("POST", "/pages", body)
+def notion_create_page(db_id: str, properties: dict) -> dict:
+    return http_post(
+        "https://api.notion.com/v1/pages",
+        NOTION_HEADERS,
+        {"parent": {"database_id": db_id}, "properties": properties}
+    )
 
 
-def update_page(page_id: str, properties: dict) -> dict:
-    return notion_request("PATCH", f"/pages/{page_id}", {"properties": properties})
+def notion_update_page(page_id: str, properties: dict) -> dict:
+    return http_patch(
+        f"https://api.notion.com/v1/pages/{page_id}",
+        NOTION_HEADERS,
+        {"properties": properties}
+    )
 
 
 # ── Helpers de propiedades Notion ──────────────────────────────────────────────
 def get_title(page: dict, field: str) -> str:
-    prop = page.get("properties", {}).get(field, {})
-    parts = prop.get("title", [])
+    parts = page.get("properties", {}).get(field, {}).get("title", [])
     return "".join(p.get("plain_text", "") for p in parts).strip()
-
 
 def get_select(page: dict, field: str) -> str:
     sel = page.get("properties", {}).get(field, {}).get("select")
     return sel.get("name", "") if sel else ""
 
-
 def get_rich_text(page: dict, field: str) -> str:
     parts = page.get("properties", {}).get(field, {}).get("rich_text", [])
     return "".join(p.get("plain_text", "") for p in parts).strip()
 
-
 def get_relation_ids(page: dict, field: str) -> list:
-    rels = page.get("properties", {}).get(field, {}).get("relation", [])
-    return [r["id"] for r in rels]
-
+    return [r["id"] for r in page.get("properties", {}).get(field, {}).get("relation", [])]
 
 def prop_title(text: str) -> dict:
     return {"title": [{"text": {"content": text}}]}
@@ -105,19 +124,97 @@ def prop_select(option: str) -> dict:
     return {"select": {"name": option}}
 
 def prop_multi_select(options: list) -> dict:
-    return {"multi_select": [{"name": o} for o in options]}
+    return {"multi_select": [{"name": o} for o in options if o]}
 
 def prop_number(n: int) -> dict:
     return {"number": n}
 
-def prop_relation(page_ids: list) -> dict:
-    return {"relation": [{"id": pid} for pid in page_ids]}
+def prop_relation(ids: list) -> dict:
+    return {"relation": [{"id": i} for i in ids]}
+
+
+# ── Claude API ─────────────────────────────────────────────────────────────────
+SYSTEM_PROMPT = """Eres un Scrum Master técnico senior especializado en desarrollo de software fullstack.
+
+Tu trabajo es analizar ideas de negocio y descomponerlas en tareas técnicas precisas, ordenadas y ejecutables por un desarrollador sin necesidad de preguntar nada adicional.
+
+REGLAS CRÍTICAS:
+1. Genera SOLO las tareas que realmente necesita la idea. No agregues capas técnicas que no aplican.
+   - Una librería/SDK no necesita tareas de Frontend ni de base de datos propia.
+   - Un rediseño de UI no necesita tareas de DB ni de Infra.
+   - Un pipeline de CI/CD no necesita tareas de Frontend ni de Backend de negocio.
+2. La cantidad de tareas depende de la complejidad real de la idea:
+   - Simple (1 flujo, sin integraciones): 1-2 tareas
+   - Media (varios flujos, alguna integración): 3-4 tareas
+   - Compleja (múltiples módulos, integraciones externas, multi-tenant, etc.): 5-8 tareas
+3. Las tareas deben estar ordenadas por dependencia lógica (lo que se hace primero va primero).
+4. Cada tarea debe ser suficientemente específica para que un desarrollador la ejecute sin preguntar.
+5. Las descripciones deben mencionar: qué hacer exactamente, qué patrones/librerías usar, qué casos edge considerar.
+6. Los criterios de aceptación deben ser verificables y concretos (mínimo 3 por tarea).
+
+TIPOS DE TAREA DISPONIBLES: DB | Backend | Frontend | Test | Infra
+ESTIMACIONES: S (< 2h) | M (2-4h) | L (4-8h) | XL (> 1 día)
+STACK DISPONIBLE: React, Next.js, Node.js, Python, PostgreSQL, MongoDB, Docker, TypeScript, Tailwind, REST API, GraphQL
+
+Responde ÚNICAMENTE con un JSON válido, sin texto adicional, sin markdown, sin explicaciones.
+Formato exacto:
+{
+  "analisis": "Una línea explicando qué tipo de entregable es esta idea y por qué se eligieron estas capas",
+  "tareas": [
+    {
+      "nombre": "Nombre imperativo claro del tipo [Tipo] Acción: contexto",
+      "tipo": "Backend",
+      "orden": 1,
+      "estimacion": "L",
+      "descripcion": "Descripción técnica detallada de qué hacer, cómo y por qué",
+      "criterios": "- Criterio verificable 1\\n- Criterio verificable 2\\n- Criterio verificable 3",
+      "stack": ["Node.js", "TypeScript"]
+    }
+  ]
+}"""
+
+
+def analizar_idea_con_claude(titulo: str, descripcion: str, stack: str, epica_nombre: str) -> dict:
+    """Llama a Claude para analizar la idea y generar tareas técnicas inteligentes."""
+
+    user_prompt = f"""Analiza esta idea de negocio y genera las tareas técnicas necesarias.
+
+IDEA: {titulo}
+
+DESCRIPCIÓN:
+{descripcion}
+
+STACK SUGERIDO: {stack if stack else "No especificado — usa TypeScript/Node.js como base"}
+
+ÉPICA/CONTEXTO DE NEGOCIO: {epica_nombre if epica_nombre else "No asignada"}
+
+Genera las tareas técnicas precisas que un equipo de desarrollo necesita para implementar esta idea."""
+
+    body = {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 4000,
+        "system": SYSTEM_PROMPT,
+        "messages": [{"role": "user", "content": user_prompt}]
+    }
+
+    response = http_post("https://api.anthropic.com/v1/messages", ANTHROPIC_HEADERS, body)
+
+    raw_text = response["content"][0]["text"].strip()
+
+    # Limpiar posibles backticks de markdown por si acaso
+    if raw_text.startswith("```"):
+        raw_text = raw_text.split("```")[1]
+        if raw_text.startswith("json"):
+            raw_text = raw_text[4:]
+
+    result = json.loads(raw_text)
+    return result
 
 
 # ── Lógica principal ───────────────────────────────────────────────────────────
 def get_epicas_activas() -> list:
     print("📖 Leyendo épicas activas...")
-    return query_db(DB_EPICAS, filters={
+    return notion_query(DB_EPICAS, filters={
         "property": "Estado",
         "select": {"equals": "Activa"}
     })
@@ -125,7 +222,7 @@ def get_epicas_activas() -> list:
 
 def get_ideas_pendientes() -> list:
     print("📖 Leyendo ideas pendientes...")
-    ideas = query_db(
+    ideas = notion_query(
         DB_IDEAS,
         filters={"property": "Estado", "select": {"equals": "Pendiente"}},
         sorts=[{"property": "Prioridad", "direction": "ascending"}]
@@ -133,480 +230,44 @@ def get_ideas_pendientes() -> list:
     return [i for i in ideas if get_select(i, "Estado") != "Bloqueado"]
 
 
-def inferir_epica(titulo: str, descripcion: str, epicas: list) -> str | None:
+def inferir_epica(titulo: str, descripcion: str, epicas: list) -> tuple[str | None, str]:
+    """Retorna (page_id, nombre_epica) de la épica más relevante."""
     if not epicas:
-        return None
-    idea_lower = (titulo + " " + descripcion).lower()
-    for epica in epicas:
-        nombre = get_title(epica, "Épica").lower()
-        desc   = get_rich_text(epica, "Descripción").lower()
-        palabras = [w for w in (nombre + " " + desc).split() if len(w) > 3]
-        if any(p in idea_lower for p in palabras):
-            return epica["id"]
-    return None
-
-
-def detectar_capas(titulo: str, descripcion: str, stack: str) -> dict:
-    """
-    Analiza el título, descripción y stack de la idea para determinar
-    qué capas técnicas son realmente necesarias.
-    Retorna un dict de booleanos: {db, backend, frontend, test, infra}
-    """
-    texto = (titulo + " " + descripcion + " " + stack).lower()
-
-    # Señales de que NO hay capa de datos nueva
-    sin_db = any(w in texto for w in [
-        "ui ", "interfaz", "diseño", "dashboard", "componente", "vista", "pantalla",
-        "rediseñ", "estilos", "css", "layout", "animacion", "refactor", "pipeline",
-        "ci/cd", "lint", "script", "automatiz", "notificacion email", "webhook outbound",
-    ])
-    # Señales explícitas de que SÍ hay BD
-    con_db = any(w in texto for w in [
-        "tabla", "esquema", "modelo", "entidad", "relacion", "migración", "migracion",
-        "base de datos", "bd ", " db ", "postgresql", "mongodb", "mysql", "sqlite",
-        "almacen", "persist", "registro", "históric", "histori", "audit", "log ",
-        "store", "repositorio de datos",
-    ])
-    necesita_db = con_db or (not sin_db and any(w in texto for w in [
-        "crud", "guardar", "crear", "editar", "eliminar", "listar", "buscar",
-        "api", "endpoint", "servicio", "backend",
-    ]))
-
-    # Señales de Frontend
-    necesita_fe = any(w in texto for w in [
-        "ui", "interfaz", "pantalla", "vista", "dashboard", "componente", "formulario",
-        "página", "pagina", "portal", "web", "app", "frontend", "fe ", "usuario ve",
-        "diseño", "layout", "rediseñ", "flujo de usuario", "ux", "onboarding",
-    ])
-
-    # Señales de Backend / API
-    necesita_be = any(w in texto for w in [
-        "api", "endpoint", "servicio", "backend", "rest", "graphql", "webhook",
-        "autenticacion", "autenticación", "autorización", "autorizacion", "jwt",
-        "lógica de negocio", "logica", "procesamiento", "integración", "integracion",
-        "notificacion", "notificación", "email", "cron", "job", "queue", "worker",
-        "audit", "log ", "crud", "importar", "exportar", "reporte",
-    ])
-    # Si hay DB o FE probablemente también hay BE
-    if necesita_db or necesita_fe:
-        necesita_be = True
-
-    # Señales de Infra
-    necesita_infra = any(w in texto for w in [
-        "deploy", "despliegue", "docker", "ci/cd", "pipeline", "kubernetes", "k8s",
-        "servidor", "cloud", "aws", "gcp", "azure", "infra", "ambiente", "entorno",
-        "staging", "produccion", "producción", "monitoreo", "alerta", "escalab",
-        "contenedor", "helm", "terraform",
-    ])
-
-    # Test siempre aplica si hay al menos una capa de código
-    necesita_test = necesita_db or necesita_be or necesita_fe or necesita_infra
-
-    return {
-        "db":       necesita_db,
-        "backend":  necesita_be,
-        "frontend": necesita_fe,
-        "test":     necesita_test,
-        "infra":    necesita_infra,
-    }
-
-
-def detectar_complejidad(titulo: str, descripcion: str) -> str:
-    """
-    Estima la complejidad de la idea basándose en señales del texto.
-    Retorna: 'simple' | 'media' | 'compleja'
-
-    - simple:  1 flujo claro, sin integraciones externas, sin roles complejos
-    - media:   varios flujos, alguna integración o lógica de permisos
-    - compleja: múltiples módulos, integraciones externas, multi-tenant, alta carga, etc.
-    """
+        return None, ""
     texto = (titulo + " " + descripcion).lower()
-    palabras = texto.split()
-
-    # Señales de alta complejidad
-    señales_alta = [
-        "multitenant", "multi-tenant", "multitenancy", "multi tenancy",
-        "microservicio", "microservice", "event sourcing", "cqrs",
-        "integración con", "integracion con", "third party", "terceros",
-        "concurrencia", "alta disponibilidad", "escalab", "sharding",
-        "múltiples módulos", "multiples modulos", "varios servicios",
-        "machine learning", "ia ", " ml ", "modelo de ia",
-        "tiempo real", "real time", "websocket", "streaming",
-        "migración de datos", "migracion de datos", "etl",
-        "compliance", "gdpr", "hipaa", "sox", "auditoria completa",
-        "sistema de pagos", "pasarela de pago", "facturación",
-        "roles y permisos", "rbac", "abac",
-    ]
-
-    # Señales de complejidad media
-    señales_media = [
-        "notificacion", "notificación", "email", "webhook",
-        "reporte", "exportar", "importar", "csv", "excel",
-        "autenticacion", "autenticación", "login", "registro",
-        "búsqueda", "busqueda", "filtros", "paginación",
-        "dashboard", "métricas", "estadísticas",
-        "integración", "integracion", "api externa",
-        "caché", "cache", "cola", "queue", "job",
-        "varios", "multiple", "diferentes", "distintos",
-    ]
-
-    score_alta  = sum(1 for s in señales_alta  if s in texto)
-    score_media = sum(1 for s in señales_media if s in texto)
-    longitud    = len(palabras)
-
-    if score_alta >= 2 or (score_alta >= 1 and longitud > 80):
-        return "compleja"
-    if score_alta == 1 or score_media >= 3 or longitud > 60:
-        return "media"
-    return "simple"
-
-
-def descomponer_idea(titulo: str, descripcion: str, stack: str) -> list:
-    stack_tags = ["TypeScript", "React", "Node.js", "PostgreSQL"]
-    if stack:
-        sl = stack.lower()
-        if "python"  in sl: stack_tags = ["Python", "PostgreSQL"]
-        if "next"    in sl: stack_tags = ["Next.js", "TypeScript", "PostgreSQL"]
-        if "mongo"   in sl: stack_tags.append("MongoDB")
-        if "docker"  in sl: stack_tags.append("Docker")
-        if "graphql" in sl: stack_tags.append("GraphQL")
-
-    capas       = detectar_capas(titulo, descripcion, stack)
-    complejidad = detectar_complejidad(titulo, descripcion)
-    print(f"  🔎 Capas: { {k for k, v in capas.items() if v} } | Complejidad: {complejidad}")
-
-    tareas = []
-    orden  = 1
-
-    # ── DB ─────────────────────────────────────────────────────────────────────
-    if capas["db"]:
-        if complejidad == "compleja":
-            # Separar diseño de implementación/migración
-            tareas.append({
-                "nombre": f"[DB] Diseñar esquema de datos para: {titulo}",
-                "tipo": "DB", "orden": orden, "estimacion": "M",
-                "descripcion": (
-                    f"Diseñar y documentar el modelo de datos para '{titulo}'.\n\n"
-                    f"Contexto: {descripcion[:400]}\n\n"
-                    "- Entidades, atributos y tipos de dato precisos\n"
-                    "- Relaciones (1:1, 1:N, N:M) y claves foráneas\n"
-                    "- Consideraciones de multi-tenancy, soft-delete o auditoría\n"
-                    "- Revisión con el equipo antes de implementar"
-                ),
-                "criterios": (
-                    "- Diagrama ER documentado en /docs\n"
-                    "- Aprobado por el equipo antes de escribir migraciones"
-                ),
-                "stack": ["PostgreSQL", "TypeScript"],
-            })
-            orden += 1
-            tareas.append({
-                "nombre": f"[DB] Implementar migraciones e índices para: {titulo}",
-                "tipo": "DB", "orden": orden, "estimacion": "M",
-                "descripcion": (
-                    f"Escribir y validar las migraciones para el esquema aprobado de '{titulo}'.\n\n"
-                    "- Scripts up/down sin downtime si es posible\n"
-                    "- Índices justificados por las queries más frecuentes\n"
-                    "- Datos de seed para desarrollo y staging"
-                ),
-                "criterios": (
-                    "- Migraciones ejecutan sin error en local y staging\n"
-                    "- Rollback probado\n"
-                    "- Índices creados y verificados con EXPLAIN"
-                ),
-                "stack": ["PostgreSQL", "TypeScript"],
-            })
-            orden += 1
-        else:
-            # Simple o media: una sola tarea de DB
-            tareas.append({
-                "nombre": f"[DB] Diseñar e implementar esquema para: {titulo}",
-                "tipo": "DB", "orden": orden, "estimacion": "S" if complejidad == "simple" else "M",
-                "descripcion": (
-                    f"Diseñar y aplicar el modelo de datos para '{titulo}'.\n\n"
-                    f"Contexto: {descripcion[:400]}\n\n"
-                    "- Entidades, relaciones e índices necesarios\n"
-                    "- Script de migración up/down\n"
-                    "- Consideraciones de normalización y constraints"
-                ),
-                "criterios": (
-                    "- Esquema documentado en /docs\n"
-                    "- Migración ejecuta sin error en local\n"
-                    "- Revisión de tipos y constraints completada"
-                ),
-                "stack": ["PostgreSQL", "TypeScript"],
-            })
-            orden += 1
-
-    # ── BACKEND ────────────────────────────────────────────────────────────────
-    if capas["backend"]:
-        if complejidad == "compleja":
-            # Separar lógica de negocio de la capa de API
-            tareas.append({
-                "nombre": f"[Backend] Implementar lógica de negocio para: {titulo}",
-                "tipo": "Backend", "orden": orden, "estimacion": "L",
-                "descripcion": (
-                    f"Implementar los casos de uso y servicios internos de '{titulo}'.\n\n"
-                    f"Contexto: {descripcion[:400]}\n\n"
-                    "- Servicios/use-cases desacoplados del transporte HTTP\n"
-                    "- Validación de reglas de negocio (no solo de inputs)\n"
-                    "- Manejo de transacciones y rollback\n"
-                    "- Logging estructurado con contexto de tenant/usuario\n"
-                    "- Tests unitarios de cada caso de uso"
-                ),
-                "criterios": (
-                    "- Cada caso de uso tiene tests unitarios con cobertura > 80%\n"
-                    "- Lógica sin dependencia directa de HTTP o BD (inversión de dependencias)\n"
-                    "- Errores de negocio tipados y diferenciados de errores técnicos"
-                ),
-                "stack": [t for t in stack_tags if t in ["Node.js", "Python", "TypeScript", "PostgreSQL", "MongoDB"]],
-            })
-            orden += 1
-            tareas.append({
-                "nombre": f"[Backend] Implementar API y controladores para: {titulo}",
-                "tipo": "Backend", "orden": orden, "estimacion": "M",
-                "descripcion": (
-                    f"Exponer los servicios de '{titulo}' via HTTP.\n\n"
-                    "- Rutas con verbos HTTP correctos\n"
-                    "- Validación de inputs con zod/joi (400 en payload inválido)\n"
-                    "- Autenticación JWT y autorización por rol/tenant\n"
-                    "- Manejo de errores HTTP sin exponer stack traces\n"
-                    "- Documentación OpenAPI de cada endpoint"
-                ),
-                "criterios": (
-                    "- Endpoints responden con status codes correctos\n"
-                    "- Tests de integración cubren flujo feliz y casos de error\n"
-                    "- OpenAPI accesible en /api/docs\n"
-                    "- .env.example actualizado"
-                ),
-                "stack": [t for t in stack_tags if t in ["Node.js", "Python", "TypeScript", "REST API", "GraphQL"]],
-            })
-            orden += 1
-        else:
-            tareas.append({
-                "nombre": f"[Backend] Implementar lógica y API para: {titulo}",
-                "tipo": "Backend", "orden": orden, "estimacion": "S" if complejidad == "simple" else "L",
-                "descripcion": (
-                    f"Crear lógica de negocio y endpoints para '{titulo}'.\n\n"
-                    f"Contexto: {descripcion[:400]}\n\n"
-                    "- Rutas con verbos HTTP correctos\n"
-                    "- Validación de inputs, autenticación JWT\n"
-                    "- Manejo de errores sin exponer stack traces\n"
-                    "- Logging estructurado y documentación OpenAPI"
-                ),
-                "criterios": (
-                    "- Endpoints responden con status codes correctos\n"
-                    "- Tests unitarios con cobertura > 70%\n"
-                    "- OpenAPI accesible en /api/docs\n"
-                    "- .env.example actualizado"
-                ),
-                "stack": [t for t in stack_tags if t in ["Node.js", "Python", "TypeScript", "PostgreSQL", "MongoDB", "REST API", "GraphQL"]],
-            })
-            orden += 1
-
-    # ── FRONTEND ───────────────────────────────────────────────────────────────
-    if capas["frontend"]:
-        if complejidad == "compleja":
-            tareas.append({
-                "nombre": f"[Frontend] Implementar componentes base para: {titulo}",
-                "tipo": "Frontend", "orden": orden, "estimacion": "M",
-                "descripcion": (
-                    f"Crear los componentes reutilizables necesarios para '{titulo}'.\n\n"
-                    f"Contexto: {descripcion[:300]}\n\n"
-                    "- Componentes atómicos y moleculares (sin lógica de negocio)\n"
-                    "- Estados: loading (skeleton), error, vacío\n"
-                    "- Diseño responsive mobile-first\n"
-                    "- Storybook o documentación visual si aplica"
-                ),
-                "criterios": (
-                    "- Componentes renderizan sin errores en mobile y desktop\n"
-                    "- Estados de loading, error y vacío implementados\n"
-                    "- Sin console.errors en build de producción"
-                ),
-                "stack": [t for t in stack_tags if t in ["React", "Next.js", "TypeScript", "Tailwind"]],
-            })
-            orden += 1
-            tareas.append({
-                "nombre": f"[Frontend] Integrar flujos y lógica de negocio para: {titulo}",
-                "tipo": "Frontend", "orden": orden, "estimacion": "L",
-                "descripcion": (
-                    f"Conectar los componentes de '{titulo}' con la API y el estado global.\n\n"
-                    "- Integración con API: fetch/axios con interceptor de token y manejo de 401\n"
-                    "- Formularios con react-hook-form + zod\n"
-                    "- Feedback en acciones async (toast, optimistic update)\n"
-                    "- Manejo de sesión y redirecciones de autenticación"
-                ),
-                "criterios": (
-                    "- Flujos completos funcionando end-to-end en desarrollo\n"
-                    "- Formularios validan antes de enviar y muestran errores por campo\n"
-                    "- Revisado en Chrome, Firefox y Safari"
-                ),
-                "stack": [t for t in stack_tags if t in ["React", "Next.js", "TypeScript", "Tailwind"]],
-            })
-            orden += 1
-        else:
-            tareas.append({
-                "nombre": f"[Frontend] Crear interfaz para: {titulo}",
-                "tipo": "Frontend", "orden": orden, "estimacion": "S" if complejidad == "simple" else "L",
-                "descripcion": (
-                    f"Desarrollar componentes y vistas para '{titulo}'.\n\n"
-                    f"Contexto: {descripcion[:400]}\n\n"
-                    "- Estados de carga, error y vacío\n"
-                    "- Formularios con validación client-side\n"
-                    "- Diseño responsive mobile-first\n"
-                    "- Integración con API con manejo de token"
-                ),
-                "criterios": (
-                    "- Vistas funcionando en mobile y desktop\n"
-                    "- Formularios validan antes de enviar\n"
-                    "- Sin console.errors en producción"
-                ),
-                "stack": [t for t in stack_tags if t in ["React", "Next.js", "TypeScript", "Tailwind"]],
-            })
-            orden += 1
-
-    # ── TEST ───────────────────────────────────────────────────────────────────
-    if capas["test"]:
-        if complejidad == "compleja":
-            tareas.append({
-                "nombre": f"[Test] Tests unitarios y de integración para: {titulo}",
-                "tipo": "Test", "orden": orden, "estimacion": "M",
-                "descripcion": (
-                    f"Tests de lógica interna para '{titulo}'.\n\n"
-                    f"Contexto: {descripcion[:300]}\n\n"
-                    "- Tests unitarios de servicios y casos de uso\n"
-                    "- Tests de integración API ↔ BD\n"
-                    "- Casos edge del dominio: datos límite, permisos, concurrencia"
-                ),
-                "criterios": (
-                    "- Cobertura > 70% en lógica de negocio\n"
-                    "- Al menos 3 casos edge testeados\n"
-                    "- Tests en CI sin flakiness"
-                ),
-                "stack": ["TypeScript"],
-            })
-            orden += 1
-            tareas.append({
-                "nombre": f"[Test] Tests E2E para: {titulo}",
-                "tipo": "Test", "orden": orden, "estimacion": "M",
-                "descripcion": (
-                    f"Tests end-to-end del flujo completo de '{titulo}'.\n\n"
-                    "- Flujo feliz completo (usuario → UI → API → BD)\n"
-                    "- Validación de permisos y roles\n"
-                    "- Manejo de errores de red (timeout, 500, 401)\n"
-                    "- Tests de regresión para bugs conocidos"
-                ),
-                "criterios": (
-                    "- Flujo principal cubierto con test E2E automatizado\n"
-                    "- Tests en CI en cada PR\n"
-                    "- Tiempo de ejecución < 5 minutos"
-                ),
-                "stack": ["TypeScript"],
-            })
-            orden += 1
-        else:
-            tareas.append({
-                "nombre": f"[Test] QA para: {titulo}",
-                "tipo": "Test", "orden": orden, "estimacion": "S" if complejidad == "simple" else "M",
-                "descripcion": (
-                    f"Pruebas para '{titulo}'.\n\n"
-                    f"Contexto: {descripcion[:300]}\n\n"
-                    "- Flujo feliz de las capas implementadas\n"
-                    "- Al menos 2 casos edge del dominio\n"
-                    "- Validación de permisos si aplica"
-                ),
-                "criterios": (
-                    "- Flujo principal cubierto con tests\n"
-                    "- Tests en CI sin flakiness\n"
-                    "- Reporte de cobertura generado"
-                ),
-                "stack": ["TypeScript"],
-            })
-            orden += 1
-
-    # ── INFRA ──────────────────────────────────────────────────────────────────
-    if capas["infra"]:
-        if complejidad == "compleja":
-            tareas.append({
-                "nombre": f"[Infra] Configurar ambientes para: {titulo}",
-                "tipo": "Infra", "orden": orden, "estimacion": "M",
-                "descripcion": (
-                    f"Infraestructura base para '{titulo}'.\n\n"
-                    f"Contexto: {descripcion[:300]}\n\n"
-                    "- Dockerfile multi-stage optimizado\n"
-                    "- Variables de entorno por ambiente (dev/staging/prod)\n"
-                    "- Health check que valide BD y dependencias críticas"
-                ),
-                "criterios": (
-                    "- Imagen Docker construye sin errores\n"
-                    "- Variables documentadas por ambiente\n"
-                    "- Health check respondiendo 200"
-                ),
-                "stack": ["Docker"],
-            })
-            orden += 1
-            tareas.append({
-                "nombre": f"[Infra] Pipeline CI/CD y monitoreo para: {titulo}",
-                "tipo": "Infra", "orden": orden, "estimacion": "M",
-                "descripcion": (
-                    f"Pipeline y observabilidad para '{titulo}'.\n\n"
-                    "- CI: lint + tests + build en cada PR\n"
-                    "- CD: deploy automático a staging en merge a main\n"
-                    "- Rollback en < 2 minutos\n"
-                    "- Alertas: error rate > 1% o latencia p95 > 2s"
-                ),
-                "criterios": (
-                    "- Pipeline CI verde en cada PR\n"
-                    "- Deploy a staging automático\n"
-                    "- Rollback probado y documentado en runbook\n"
-                    "- Alertas configuradas"
-                ),
-                "stack": ["Docker"],
-            })
-            orden += 1
-        else:
-            tareas.append({
-                "nombre": f"[Infra] Configurar deploy para: {titulo}",
-                "tipo": "Infra", "orden": orden, "estimacion": "M",
-                "descripcion": (
-                    f"Pipeline CI/CD para '{titulo}'.\n\n"
-                    f"Contexto: {descripcion[:300]}\n\n"
-                    "- Dockerfile multi-stage\n"
-                    "- Variables de entorno por ambiente\n"
-                    "- Health check y rollback strategy"
-                ),
-                "criterios": (
-                    "- Pipeline CI en cada PR\n"
-                    "- Deploy automático a staging\n"
-                    "- Rollback documentado en runbook"
-                ),
-                "stack": ["Docker"],
-            })
-            orden += 1
-
-    return tareas
+    for epica in epicas:
+        nombre = get_title(epica, "Épica")
+        desc   = get_rich_text(epica, "Descripción")
+        palabras = [w for w in (nombre + " " + desc).lower().split() if len(w) > 3]
+        if any(p in texto for p in palabras):
+            return epica["id"], nombre
+    return None, ""
 
 
 def crear_tareas_en_notion(tareas: list, idea_id: str, epica_id: str | None) -> int:
     creadas = 0
     for t in tareas:
+        stack_list = t.get("stack", [])
+        if isinstance(stack_list, str):
+            stack_list = [s.strip() for s in stack_list.split(",")]
+
         props = {
             "Tarea":                   prop_title(t["nombre"]),
             "Tipo":                    prop_select(t["tipo"]),
             "Orden":                   prop_number(t["orden"]),
             "Estimación":              prop_select(t["estimacion"]),
             "Estado":                  prop_select("Backlog"),
-            "Descripción técnica":     prop_rich_text(t["descripcion"]),
-            "Criterios de aceptación": prop_rich_text(t["criterios"]),
-            "Stack":                   prop_multi_select(t.get("stack", [])),
+            "Descripción técnica":     prop_rich_text(t.get("descripcion", "")),
+            "Criterios de aceptación": prop_rich_text(t.get("criterios", "")),
+            "Stack":                   prop_multi_select(stack_list),
             "Idea origen":             prop_relation([idea_id]),
         }
         if epica_id:
             props["Épica"] = prop_relation([epica_id])
 
-        create_page(DB_TAREAS, props)
+        notion_create_page(DB_TAREAS, props)
         creadas += 1
-        print(f"  ✅ {t['nombre']}")
+        print(f"  ✅ [{t['tipo']}] {t['nombre']} ({t['estimacion']})")
 
     return creadas
 
@@ -639,16 +300,19 @@ def procesar_ideas():
         epica_ids = get_relation_ids(idea, "Épica")
         if epica_ids:
             epica_id = epica_ids[0]
-            print(f"  🏔️  Épica ya asignada")
+            epica_nombre = next(
+                (get_title(e, "Épica") for e in epicas if e["id"] == epica_id), ""
+            )
+            print(f"  🏔️  Épica ya asignada: {epica_nombre}")
         else:
-            epica_id = inferir_epica(titulo, descripcion, epicas)
+            epica_id, epica_nombre = inferir_epica(titulo, descripcion, epicas)
             if epica_id:
-                print(f"  🏔️  Épica inferida y asignada")
-                update_page(idea_id, {"Épica": prop_relation([epica_id])})
+                print(f"  🏔️  Épica inferida: {epica_nombre}")
+                notion_update_page(idea_id, {"Épica": prop_relation([epica_id])})
             else:
-                print("  ⚠️  Sin épica asignada (ninguna hace match)")
+                print("  ⚠️  Sin épica asignada")
 
-        # Descomponer — si descripción muy corta, solo refinamiento
+        # Descripción muy corta → refinamiento sin llamar a Claude
         if len(descripcion.strip()) < 30:
             print("  ⚠️  Descripción muy corta — creando tarea de refinamiento")
             tareas = [{
@@ -656,21 +320,25 @@ def procesar_ideas():
                 "tipo": "Test", "orden": 1, "estimacion": "S",
                 "descripcion": (
                     f"La idea '{titulo}' necesita más contexto antes de descomponerse.\n"
-                    "Definir: alcance, usuarios, criterios de éxito y stack tecnológico."
+                    "Definir: alcance, usuarios objetivo, criterios de éxito y stack tecnológico."
                 ),
                 "criterios": (
-                    "- Descripción actualizada con al menos 3 párrafos\n"
+                    "- Descripción actualizada con al menos 3 párrafos de contexto\n"
                     "- Stack tecnológico definido\n"
                     "- Criterios de éxito acordados con el equipo"
                 ),
                 "stack": [],
             }]
         else:
-            tareas = descomponer_idea(titulo, descripcion, stack)
+            # Analizar con Claude
+            print("  🧠 Analizando con Claude...")
+            resultado = analizar_idea_con_claude(titulo, descripcion, stack, epica_nombre)
+            print(f"  📊 Análisis: {resultado.get('analisis', '')}")
+            tareas = resultado.get("tareas", [])
 
         n = crear_tareas_en_notion(tareas, idea_id, epica_id)
-        update_page(idea_id, {"Estado": prop_select("En progreso")})
-        print(f"  📝 {n} tareas creadas — idea marcada como 'En progreso'\n")
+        notion_update_page(idea_id, {"Estado": prop_select("En progreso")})
+        print(f"  📝 {n} tarea(s) creadas — idea marcada como 'En progreso'\n")
 
     print("=" * 60)
     print(f"✅ Ejecución completada. {len(ideas_a_procesar)} idea(s) procesada(s).")
