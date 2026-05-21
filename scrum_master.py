@@ -39,7 +39,11 @@ def notion_request(method: str, path: str, body: dict = None) -> dict:
         with urllib.request.urlopen(req) as resp:
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
-        error_body = json.loads(e.read())
+        raw = e.read()
+        try:
+            error_body = json.loads(raw)
+        except json.JSONDecodeError:
+            error_body = raw.decode(errors="replace")
         raise RuntimeError(f"Notion API {method} {path} → {e.code}: {error_body}")
 
 
